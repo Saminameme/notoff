@@ -1,10 +1,18 @@
-FROM webdevops/php-apache:7.4-alpine
+FROM webdevops/php-apache:8.1-alpine
 
 # Environment variables for Node.js
 ENV NODE_VERSION 18.18.0
 ENV PATH /usr/local/bin:$PATH
 
 # Install Node.js and Yarn
-RUN apk add --no-cache curl \            && curl -fsSLO --compressed "https://unofficial-builds.nodejs.org/download/release/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64-musl.tar.xz" \            && tar -xJf "node-v$NODE_VERSION-linux-x64-musl.tar.xz" -C /usr/local --strip-components=1 --no-same-owner \            && ln -s /usr/local/bin/node /usr/local/bin/nodejs \            && npm config set unsafe-perm true \            && npm install -g yarn \            && apk del curl \            && rm -rf /tmp/* /var/cache/apk/*
+RUN apk update && apk add --no-cache curl \
+            && curl -fsSLO --compressed "https://unofficial-builds.nodejs.org/download/release/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64-musl.tar.xz" \
+            && tar -xJf "node-v$NODE_VERSION-linux-x64-musl.tar.xz" -C /usr/local --strip-components=1 --no-same-owner \
+            && ln -s /usr/local/bin/node /usr/local/bin/nodejs \
+            && npm install -g yarn \
+            && apk del curl \
+            && rm -rf /tmp/* /var/cache/apk/*
+
+RUN mkdir -p /app/api/storage && chown application:application /app/api/storage
 
 COPY vhost.conf /opt/docker/etc/httpd/vhost.conf

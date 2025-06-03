@@ -36,22 +36,6 @@ class AuthedApiController
      */
     public function attachUpload($name)
     {
-        /*
-        "Array
-        (
-            [attach] => Array
-                (
-                    [name] => blob
-                    [type] => attach/png
-                    [tmp_name] => /private/var/folders/q7/3xwy3ysn2sggtwzq98fpf3l40000gn/T/php1iUQLb
-                    [error] => 0
-                    [size] => 38084
-                )
-
-        )
-        "
-        */
-
         if (!isset($_FILES['attach'])) {
             return lianmi_throw('INPUT', '找不到上传的文件，[attach] 不存在');
         }
@@ -65,11 +49,8 @@ class AuthedApiController
             $name = mb_substr($name, -15, null, 'UTF-8');
         }
 
-
-        // 生成新文件名
         $path = 'u' . $_SESSION['uid'] . '/' . date("Y.m.d.") . uniqid() . $name ;
 
-        // 保存文件
         if (!storage()->write($path, file_get_contents($_FILES['attach']['tmp_name']), ['visibility' => 'private'])) {
             return lianmi_throw('FILE', '保存文件失败');
         }
@@ -119,7 +100,6 @@ class AuthedApiController
 
         $tmp_name = $_FILES['image']['tmp_name'];
 
-        // Server-side MIME type validation
         $finfo = finfo_open(FILEINFO_MIME_TYPE);
         $mime_type = finfo_file($finfo, $tmp_name);
         finfo_close($finfo);
@@ -129,51 +109,30 @@ class AuthedApiController
             return lianmi_throw('INPUT', '不支持的文件类型: ' . $mime_type . '. 只允许 JPEG, PNG, GIF.');
         }
 
-        // Determine extension based on MIME type
         $extension = '';
         switch ($mime_type) {
-            case 'image/jpeg':
-                $extension = 'jpg';
-                break;
-            case 'image/png':
-                $extension = 'png';
-                break;
-            case 'image/gif':
-                $extension = 'gif';
-                break;
-            default: // Should not happen due to check above
-                return lianmi_throw('INPUT', '无法确定文件扩展名');
+            case 'image/jpeg': $extension = 'jpg'; break;
+            case 'image/png': $extension = 'png'; break;
+            case 'image/gif': $extension = 'gif'; break;
+            default: return lianmi_throw('INPUT', '无法确定文件扩展名');
         }
 
-        // Generate new filename
         $path = 'u' . $_SESSION['uid'] . '/' . date("Y.m.d.") . uniqid() . '.' . $extension;
 
         try {
-            // Re-process image using Intervention Image
-            $imgManager = new \Intervention\Image\ImageManagerStatic(); // Use static facade if preferred
+            $imgManager = new \Intervention\Image\ImageManagerStatic();
             $image = $imgManager->make($tmp_name);
-            
-            // Optional: Auto-orient based on EXIF data
             $image->orientate();
+            $image_data = (string) $image->encode($extension, 90);
 
-            // Optional: Resize if images are too large, e.g., max width/height
-            // $image->resize(1920, 1080, function ($constraint) {
-            //     $constraint->aspectRatio();
-            //     $constraint->upsize();
-            // });
-
-            $image_data = (string) $image->encode($extension, 90); // Encode to original type, quality 90 for jpg/png
-
-            // Save the processed file
             if (!storage()->write($path, $image_data, ['visibility' => 'private', 'mimetype' => $mime_type])) {
                 return lianmi_throw('FILE', '保存文件失败');
             }
         } catch (\Exception $e) {
-            // Log error: error_log("Image processing/saving failed: " . $e->getMessage());
             return lianmi_throw('FILE', '图像处理或保存失败: ' . $e->getMessage());
         }
         
-        return send_result(['url' => path2url($path) ]); // path2url default action is 'image'
+        return send_result(['url' => path2url($path) ]);
     }
 
     /**
@@ -186,22 +145,6 @@ class AuthedApiController
      */
     public function imageUploadToThumb()
     {
-        /*
-        "Array
-        (
-            [image] => Array
-                (
-                    [name] => blob
-                    [type] => image/png
-                    [tmp_name] => /private/var/folders/q7/3xwy3ysn2sggtwzq98fpf3l40000gn/T/php1iUQLb
-                    [error] => 0
-                    [size] => 38084
-                )
-
-        )
-        "
-        */
-
         if (!isset($_FILES['image'])) {
             return lianmi_throw('INPUT', '找不到上传的文件，[image] 不存在');
         }
@@ -210,36 +153,24 @@ class AuthedApiController
         }
         
         $mime = strtolower($_FILES['image']['type']);
-
         if ($mime != 'image/png' && $mime != 'image/jpg' && $mime != 'image/jpeg') {
             return lianmi_throw('INPUT', '本接口只支持 png 和 jpg 格式的图片'.$mime);
-        } // image/jpeg
-
-        // 考虑到 png 透明的问题，加个 type 吧
-        if ($mime == 'image/png') {
-            $type = 'png';
-        } else {
-            $type = 'jpg';
         }
+
+        $type = ($mime == 'image/png') ? 'png' : 'jpg';
         
-        // 生成新文件名
         $prefix = 'u' . $_SESSION['uid'] . '/' . date("Y.m.d.") . uniqid() ;
         $path = $prefix. '.' . $type;
         $path_thumb = $prefix . '.thumb.'.$type;
 
-        // 不管是不是原图，都用图像库处理，进行转化和缩图，避免安全风险
         $img = new \Intervention\Image\ImageManager();
-
-        // 将原图转化为 jpg 格式
         $orignal_data = (string)$img->make($_FILES['image']['tmp_name'])->encode($type, 100);
 
-        // 保存原图
         if (!storage()->write($path, $orignal_data, ['visibility' => 'private'])) {
             return lianmi_throw('FILE', '保存文件失败');
         }
         $orignal_url = path2url($path);
 
-        // 开始缩图
         $thumb_data = (string)$img->make($_FILES['image']['tmp_name'])->fit(200, 200, null, 'top')->encode($type, 100);
         if (!storage()->write($path_thumb, $thumb_data, ['visibility' => 'private'])) {
             return lianmi_throw('FILE', '保存文件失败');
@@ -248,6 +179,67 @@ class AuthedApiController
         $thumb_url = path2url($path_thumb);
 
         return send_result(compact('orignal_url', 'thumb_url', 'prexfix', 'type'));
+    }
+
+    /**
+     * Audio Upload
+     * @ApiDescription(section="Global", description="Audio file upload")
+     * @ApiLazyRoute(uri="/audio/upload",method="POST")
+     * @ApiParams(name="audio_file", type="file", nullable=false, description="Audio file to upload")
+     * @ApiReturn(type="object", sample="{'code': 0, 'message': 'success', 'data': {'url': '...', 'name': 'filename.mp3', 'mimetype': 'audio/mpeg', 'size': 12345}}")
+     */
+    public function audioUpload()
+    {
+        if (!isset($_FILES['audio_file']) || !isset($_FILES['audio_file']['tmp_name']) || empty($_FILES['audio_file']['tmp_name'])) {
+            return lianmi_throw('INPUT', '找不到上传的文件，[audio_file] 不存在');
+        }
+        if (intval($_FILES['audio_file']['error']) !== 0) {
+            return lianmi_throw('INPUT', '文件上传失败，错误代码: ' . $_FILES['audio_file']['error']);
+        }
+
+        $tmp_name = $_FILES['audio_file']['tmp_name'];
+        $original_name = basename($_FILES['audio_file']['name']);
+
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $mime_type = finfo_file($finfo, $tmp_name);
+        finfo_close($finfo);
+
+        $allowed_mime_types = ['audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/aac', 'audio/mp4'];
+        if (!in_array($mime_type, $allowed_mime_types)) {
+            return lianmi_throw('INPUT', '不支持的音频文件类型: ' . $mime_type);
+        }
+
+        $extension_map = ['audio/mpeg' => 'mp3', 'audio/ogg' => 'ogg', 'audio/wav' => 'wav', 'audio/aac' => 'aac', 'audio/mp4' => 'm4a'];
+        $extension = isset($extension_map[$mime_type]) ? $extension_map[$mime_type] : pathinfo($original_name, PATHINFO_EXTENSION);
+        if (empty($extension) && $mime_type === 'audio/mpeg') $extension = 'mp3';
+
+        if (empty($extension)) {
+            $original_extension = strtolower(pathinfo($original_name, PATHINFO_EXTENSION));
+            if(in_array($original_extension, ['mp3', 'ogg', 'wav', 'aac', 'm4a'])){
+                $extension = $original_extension;
+            } else {
+                 return lianmi_throw('INPUT', '无法确定音频文件扩展名，请确保文件名包含正确的扩展名.');
+            }
+        }
+
+        $path = 'u' . $_SESSION['uid'] . '/' . date("Y.m.d.") . uniqid() . '.' . $extension;
+        $file_size = $_FILES['audio_file']['size'];
+
+        try {
+            if (!storage()->write($path, file_get_contents($tmp_name), ['visibility' => 'private', 'mimetype' => $mime_type])) {
+                return lianmi_throw('FILE', '保存音频文件失败');
+            }
+        } catch (\Exception $e) {
+            return lianmi_throw('FILE', '音频文件保存异常: ' . $e->getMessage());
+        }
+
+        return send_result([
+            'url' => path2url($path, 'attach'),
+            'name' => $original_name,
+            'mimetype' => $mime_type,
+            'size' => $file_size,
+            '_path_debug' => $path
+        ]);
     }
 
     /**
@@ -263,6 +255,10 @@ class AuthedApiController
 
         if (!$feed) {
             return lianmi_throw('INPUT', 'id对应的内容不存在或已被删除');
+        }
+
+        if (in_array($feed['status'], ['draft', 'scheduled']) && $feed['uid'] != lianmi_uid()) {
+            return lianmi_throw('AUTH', 'You do not have permission to remove this content.');
         }
         
         if ($feed['is_forward'] == 1) {
@@ -294,11 +290,9 @@ class AuthedApiController
     public function groupTop($group_id, $feed_id, $status = 1)
     {
         $group_id = intval($group_id);
-        $feed_id_for_query = intval($feed_id); // Store original feed_id for queries
+        $feed_id_for_query = intval($feed_id);
         $top_status_feed_id = ($status == 1) ? $feed_id_for_query : 0;
 
-        // 检查权限
-        // LDO usage is already safe due to previous refactoring of LDO itself
         if (!$group = table('group')->getAllById($group_id)->toLine()) {
             return lianmi_throw('INPUT', '错误的栏目ID，栏目不存在或已被删除');
         }
@@ -331,11 +325,17 @@ class AuthedApiController
      * @ApiParams(name="text", type="string", nullable=false, description="text", check="check_not_empty", cnname="内容内容")
      * @ApiParams(name="images", type="string", nullable=false, description="images", cnname="内容附图")
      * @ApiParams(name="attach", type="string", nullable=false, description="attach", cnname="内容附件")
+     * @ApiParams(name="audio_file_json", type="string", nullable=true, description="Audio file JSON metadata", cnname="音频文件JSON")
+     * @ApiParams(name="tags_json_string", type="string", nullable=true, description="JSON string array of tag names", cnname="标签JSON字符串")
+     * @ApiParams(name="status", type="string", nullable=true, description="Feed status (e.g., 'published', 'draft', 'scheduled')", cnname="内容状态")
+     * @ApiParams(name="scheduled_at_string", type="string", nullable=true, description="Scheduled publishing time (YYYY-MM-DD HH:MM:SS), or empty to clear schedule", cnname="定时发布时间")
+    * @ApiParams(name="poll_question", type="string", nullable=true, description="Poll question text. If provided with options, a poll will be created if one doesn't exist.", cnname="投票问题")
+    * @ApiParams(name="poll_options_json", type="string", nullable=true, description="JSON string array of poll options. Required if poll_question is set for creating a poll.", cnname="投票选项JSON")
      * @ApiParams(name="is_paid", type="int", nullable=false, description="is_paid", cnname="是否为付费内容")
      * @ApiLazyRoute(uri="/feed/update/@id",method="POST|GET")
      * @ApiReturn(type="object", sample="{'code': 0,'message': 'success'}")
      */
-    public function feedUpdate($id, $text, $images='', $attach = '', $is_paid=0)
+    public function feedUpdate($id, $text, $images='', $attach = '', $audio_file_json = '', $tags_json_string = '', $status = null, $scheduled_at_string = null, $is_paid=0, $poll_question = null, $poll_options_json = null)
     {
         $id = intval($id);
         $is_paid = abs(intval($is_paid));
@@ -345,12 +345,114 @@ class AuthedApiController
         if (!$feed) {
             return lianmi_throw('INPUT', 'id对应的内容不存在或已被删除');
         }
+
+        // Determine initial post_type based on existing feed or new content
+        $post_type = $feed['post_type'];
+        // $files_data_to_store = $feed['files']; // Default to existing files
+        // attach is a general param, let's use it if audio_file_json is not taking precedence
+        $files_data_to_store = $attach !== '' ? $attach : $feed['files'];
+
+
+        if (isset($audio_file_json)) { // If audio_file_json is explicitly passed (even if empty string)
+            if(!empty($audio_file_json)){
+                $audio_data = @json_decode($audio_file_json, true);
+                if ($audio_data && isset($audio_data['url'])) {
+                    $files_data_to_store = $audio_file_json;
+                    $post_type = 'audio';
+                } else { // Invalid audio json, or clearing audio
+                    $files_data_to_store = ''; // Clear previous audio if new json is invalid/empty
+                    if ($post_type === 'audio' || $post_type === 'mixed') $post_type = 'text'; // Revert type if it was audio
+                }
+            } else { // Explicitly empty string means remove audio
+                 $files_data_to_store = '';
+                 if ($post_type === 'audio' || $post_type === 'mixed') $post_type = 'text';
+            }
+        }
+
+
+        if (isset($images)) { // If images param is explicitly passed
+            if(!empty($images)){
+                // If post_type was audio and now images are added, it becomes mixed.
+                // If it wasn't audio, it becomes image.
+                $post_type = ($post_type === 'audio') ? 'mixed' : 'image';
+            } else { // Explicitly empty string means remove images
+                if($post_type === 'image') $post_type = 'text';
+                // If it was 'mixed', and audio content ($files_data_to_store) is also empty, it becomes 'text'.
+                // If audio remains, it becomes 'audio'.
+                else if ($post_type === 'mixed') {
+                    $post_type = ($files_data_to_store === '' || $files_data_to_store === null) ? 'text' : 'audio';
+                }
+            }
+        } else { // images param not passed, retain original image relation unless audio overwrites
+            // This means if $feed['images'] was not empty, and $post_type became 'audio' due to new audio,
+            // it should now become 'mixed'.
+            if (!empty($feed['images']) && $post_type === 'audio') {
+                 $post_type = 'mixed';
+            } else if (empty($feed['images']) && $post_type === 'mixed' && $files_data_to_store !== '' && $files_data_to_store !== null) {
+                // If original was mixed, but images are now not set (relying on $feed['images'] being empty)
+                // and audio is present, it should be 'audio'.
+                // This case is complex; simpler to assume if $images is not passed, $feed['images'] is used later.
+                // The $post_type calculation here is trying to be smart.
+                // A simpler $post_type logic:
+                // 1. Default to $feed['post_type'] or 'text'.
+                // 2. If audio is set/changed, it becomes 'audio'.
+                // 3. If images are set/changed (and not audio), it becomes 'image'.
+                // 4. If both are present, 'mixed'.
+                // 5. Poll overrides all. (Handled below)
+            }
+        }
+
+        // Poll handling
+        $existing_poll = get_line("SELECT `id` FROM `polls` WHERE `feed_id` = :feed_id LIMIT 1", [':feed_id' => $id]);
+
+        if (!$existing_poll && !empty($poll_question) && !empty($poll_options_json)) {
+            $poll_options = @json_decode($poll_options_json, true);
+            if (is_array($poll_options) && count($poll_options) >= 2) {
+                try {
+                    run_sql("INSERT INTO `polls` (`feed_id`, `question`, `created_at`) VALUES (:feed_id, :question, :now)", [
+                        ':feed_id' => $id,
+                        ':question' => $poll_question,
+                        ':now' => lianmi_now()
+                    ]);
+                    $poll_id = db()->lastId();
+                    if ($poll_id) {
+                        foreach ($poll_options as $option_text) {
+                            if (!empty(trim($option_text))) {
+                                run_sql("INSERT INTO `poll_options` (`poll_id`, `option_text`) VALUES (:poll_id, :option_text)", [
+                                    ':poll_id' => $poll_id,
+                                    ':option_text' => trim($option_text)
+                                ]);
+                            }
+                        }
+                        $post_type = 'poll'; // Set post_type to 'poll'
+                    }
+                } catch (\PDOException $e) {
+                    // error_log("Poll creation error for feed $id: " . $e->getMessage());
+                }
+            }
+        } elseif ($existing_poll && (!empty($poll_question) || !empty($poll_options_json))) {
+            // Poll exists, and new poll data was sent. V1: no editing.
+            // Optionally, log or notify that poll editing is not supported.
+            // Ensure post_type remains 'poll' if it already was.
+            if ($feed['post_type'] === 'poll') {
+                $post_type = 'poll';
+            }
+        }
+
+        // Final post_type check: if it's not a poll, and all content is empty, should be 'text'.
+        $current_images = isset($images) ? $images : $feed['images'];
+        if ($post_type !== 'poll' && empty($text) && empty($current_images) && ($files_data_to_store === '' || $files_data_to_store === null)) {
+             $post_type = 'text';
+        }
+
+        if (!$feed) {
+            return lianmi_throw('INPUT', 'id对应的内容不存在或已被删除');
+        }
         
         if ($feed['uid'] != lianmi_uid()) {
             return lianmi_throw('AUTH', '只有作者才能修改自己的内容');
         }
 
-        // Image URL validation logic remains important.
         if (strlen($images) > 1) {
             if (!$image_list = @json_decode($images, 1)) { 
                 $images = ''; 
@@ -363,22 +465,81 @@ class AuthedApiController
             }
         }
 
-        $sql = "UPDATE `feed` SET `text` = :text, `images` = :images, `files` = :files, `is_paid` = :is_paid WHERE `id` = :id LIMIT 1 ";
-        
-        $params = [
-            ':text' => $text,
-            ':images' => $images,
-            ':files' => $attach,
-            ':is_paid' => $is_paid,
-            ':id' => $id
+        $update_fields = [
+            "`text` = :text", "`images` = :images", "`files` = :files",
+            "`is_paid` = :is_paid", "`post_type` = :post_type"
         ];
-        run_sql($sql, $params);
+        $params = [
+            ':text' => $text, ':images' => $images, ':files' => $files_data_to_store,
+            ':is_paid' => $is_paid, ':post_type' => $post_type, ':id' => $id
+        ];
+
+        $new_status = ($status !== null && in_array($status, ['published', 'draft', 'scheduled'])) ? $status : $feed['status'];
+        $new_scheduled_at = $feed['scheduled_at'];
+
+        if ($scheduled_at_string !== null) {
+            if (empty($scheduled_at_string)) {
+                $new_scheduled_at = null;
+                if ($new_status === 'scheduled') {
+                    $new_status = ($feed['status'] === 'draft' && $status === null) ? 'draft' : 'published';
+                }
+            } else {
+                try {
+                    $scheduled_datetime = new \DateTime($scheduled_at_string);
+                    $now_datetime = new \DateTime();
+                    if ($scheduled_datetime > $now_datetime) {
+                        $new_scheduled_at = $scheduled_datetime->format('Y-m-d H:i:s');
+                        if ($new_status !== 'draft') {
+                             $new_status = 'scheduled';
+                        } else {
+                            $new_scheduled_at = null;
+                        }
+                    } else {
+                        $new_scheduled_at = null;
+                        if ($new_status === 'scheduled') $new_status = 'published';
+                    }
+                } catch (\Exception $e) {
+                    if ($new_status === 'scheduled') $new_status = $feed['status'];
+                }
+            }
+        }
+
+        if ($new_status === 'draft' || $new_status === 'published') {
+            $new_scheduled_at = null;
+        }
+
+        if ($status === null && $feed['status'] === 'scheduled' && $new_scheduled_at === null) {
+            $new_status = 'published';
+        }
+
+        if ($new_status !== $feed['status']) {
+            $update_fields[] = "`status` = :status";
+            $params[':status'] = $new_status;
+        }
+        if ($new_scheduled_at !== $feed['scheduled_at']) {
+             $update_fields[] = "`scheduled_at` = :scheduled_at";
+             $params[':scheduled_at'] = $new_scheduled_at;
+        }
+
+        if (!empty($update_fields)) {
+            $sql = "UPDATE `feed` SET " . implode(', ', $update_fields) . " WHERE `id` = :id LIMIT 1 ";
+            run_sql($sql, $params);
+        }
 
         $feed['text'] = $text;
         $feed['images'] = $images; 
-        $feed['files'] = $attach; 
+        $feed['files'] = $files_data_to_store;
         $feed['is_paid'] = $is_paid;
+        $feed['post_type'] = $post_type;
+        $feed['status'] = $new_status;
+        $feed['scheduled_at'] = $new_scheduled_at;
 
+        if ($tags_json_string !== null) {
+            $tag_names = @json_decode($tags_json_string, true);
+            if (is_array($tag_names)) {
+                $this->processFeedTags($id, $tag_names);
+            }
+        }
         return send_result($feed);
     }
 
@@ -390,25 +551,87 @@ class AuthedApiController
      * @ApiParams(name="groups", type="string", nullable=false, description="groups", check="check_not_empty", cnname="目标栏目")
      * @ApiParams(name="images", type="string", nullable=false, description="images", cnname="内容附图")
     * @ApiParams(name="attach", type="string", nullable=false, description="attach", cnname="内容附件")
+    * @ApiParams(name="audio_file_json", type="string", nullable=true, description="Audio file JSON metadata", cnname="音频文件JSON")
+    * @ApiParams(name="tags_json_string", type="string", nullable=true, description="JSON string array of tag names", cnname="标签JSON字符串")
+    * @ApiParams(name="status", type="string", nullable=true, description="Feed status (e.g., 'published', 'draft', 'scheduled')", cnname="内容状态")
+    * @ApiParams(name="scheduled_at_string", type="string", nullable=true, description="Scheduled publishing time (YYYY-MM-DD HH:MM:SS)", cnname="定时发布时间")
+    * @ApiParams(name="poll_question", type="string", nullable=true, description="Poll question text", cnname="投票问题")
+    * @ApiParams(name="poll_options_json", type="string", nullable=true, description="JSON string array of poll options", cnname="投票选项JSON")
      * @ApiParams(name="is_paid", type="int", nullable=false, description="is_paid", cnname="是否为付费内容")
      * @ApiLazyRoute(uri="/feed/publish",method="POST|GET")
      * @ApiReturn(type="object", sample="{'code': 0,'message': 'success'}")
      */
-    public function feedPublish($text, $groups, $images='', $attach = '', $is_paid=0)
+    public function feedPublish($text, $groups, $images='', $attach = '', $audio_file_json = '', $tags_json_string = '', $status = 'published', $scheduled_at_string = null, $is_paid=0, $poll_question = null, $poll_options_json = null)
     {
         $is_paid = abs(intval($is_paid));
         
-        // 首先需要做一个增强验证
+        $current_status = in_array($status, ['published', 'draft', 'scheduled']) ? $status : 'published';
+        $db_scheduled_at = null;
+
+        if (!empty($scheduled_at_string)) {
+            try {
+                $scheduled_datetime = new \DateTime($scheduled_at_string);
+                $now_datetime = new \DateTime();
+                if ($scheduled_datetime > $now_datetime) {
+                    // Only set to 'scheduled' if not explicitly set to 'draft'
+                    if ($current_status !== 'draft') {
+                        $current_status = 'scheduled';
+                        $db_scheduled_at = $scheduled_datetime->format('Y-m-d H:i:s');
+                    } else {
+                         $db_scheduled_at = null; // If status is 'draft', scheduled_at must be null
+                    }
+                } else {
+                    // It's a past date, so publish immediately if status was intended to be 'scheduled' or 'published'
+                    if ($current_status === 'scheduled') $current_status = 'published';
+                     $db_scheduled_at = null; // Clear any past schedule
+                }
+            } catch (\Exception $e) {
+                // Invalid datetime string, treat as no schedule.
+                // If status was 'scheduled', revert to 'published'.
+                if ($current_status === 'scheduled') $current_status = 'published';
+                $db_scheduled_at = null;
+            }
+        } else {
+            // No scheduled_at_string provided. If status was 'scheduled' (e.g. from client default), revert to 'published'.
+           if ($current_status === 'scheduled') $current_status = 'published';
+           $db_scheduled_at = null; // Ensure it's null if no valid schedule string
+        }
+
+        // If the final status is draft, ensure scheduled_at is NULL
+        if ($current_status === 'draft') {
+           $db_scheduled_at = null;
+        }
+
+        $post_type = 'text';
+        $files_data_to_store = $attach;
+
+        if (!empty($audio_file_json)) {
+            $audio_data = @json_decode($audio_file_json, true);
+            if ($audio_data && isset($audio_data['url'])) {
+                $files_data_to_store = $audio_file_json;
+                $post_type = 'audio';
+            }
+        }
+
+        if (!empty($images)) {
+            $post_type = ($post_type === 'audio') ? 'mixed' : 'image';
+        }
+
+        // Poll data takes precedence for post_type if provided
+        if (!empty($poll_question) && !empty($poll_options_json)) {
+            $_poll_options_test = @json_decode($poll_options_json, true);
+            if (is_array($_poll_options_test) && count($_poll_options_test) >= 2) {
+                $post_type = 'poll';
+            }
+        }
+
         $group_ids = json_decode($groups, 1);
         
-        // 如果栏目数据不对
         if (!is_array($group_ids) || intval($group_ids[0]) < 1) {
             return lianmi_throw('INPUT', '目标栏目不能为空'.$groups);
         }
 
-        // 检测栏目权限
-        // Using lianmi_uid() directly in SQL, ensure it's an int
-        $uid = lianmi_uid(); // This is already intval'd
+        $uid = lianmi_uid();
         $allowed_groups = get_data("SELECT * FROM `group_member` WHERE `uid` = :uid AND ( `is_author` = 1 OR `can_contribute` = 1 ) LIMIT ". intval(c('max_group_per_user')), [':uid' => $uid]);
 
         $allowed_gids = [];
@@ -424,20 +647,15 @@ class AuthedApiController
         }
 
         foreach ($group_ids as $key => $gid) {
-            // 如果栏目 id 没有权限，从列表中移除
             if (!in_array($gid, $allowed_gids)) {
                 unset($group_ids[$key]);
             }
-
-            //
         }
 
-        // 如果移除无权限的栏目以后，没有可用的栏目，则抛出异常
         if (count($group_ids) < 1) {
             return lianmi_throw('INPUT', '您选择的栏目都没有发布或投稿权限，请重新选择');
         }
 
-        // 检查image数据，确保没有外部链接以避免带来安全问题，这个地方存在链接伪造风风险
         if (strlen($images) > 1) {
             if (!$image_list = @json_decode($images, 1)) {
                 $images = '';
@@ -450,59 +668,156 @@ class AuthedApiController
             }
         }
 
-        // 开始入库
         $now = lianmi_now();
         $uid = lianmi_uid();
 
-        $sql_insert_feed = "INSERT INTO `feed` ( `text` , `group_id` , `images` , `files` , `uid` , `is_paid` , `timeline` ) VALUES ( :text , '0' , :images , :files , :uid , :is_paid , :timeline )";
+        $sql_insert_feed = "INSERT INTO `feed` ( `text` , `group_id` , `images` , `files` , `uid` , `is_paid` , `timeline`, `post_type`, `status`, `scheduled_at` ) VALUES ( :text , '0' , :images , :files , :uid , :is_paid , :timeline, :post_type, :status, :scheduled_at )";
         $params_insert_feed = [
             ':text' => $text,
             ':images' => $images,
-            ':files' => $attach,
+            ':files' => $files_data_to_store,
             ':uid' => $uid,
             ':is_paid' => $is_paid,
-            ':timeline' => $now
+            ':timeline' => $now,
+            ':post_type' => $post_type,
+            ':status' => $current_status,
+            ':scheduled_at' => $db_scheduled_at
         ];
         run_sql($sql_insert_feed, $params_insert_feed);
         $feed_id = db()->lastId();
 
-        if (is_array($author_gids) && count($author_gids) > 0) {
-            foreach ($author_gids as $gid) {
-                if (!in_array($gid, $group_ids)) continue;
-                $gid = intval($gid);
+        if ($feed_id) {
+            if (!empty($tags_json_string)) {
+                $tag_names = @json_decode($tags_json_string, true);
+                if (is_array($tag_names) && !empty($tag_names)) {
+                    $this->processFeedTags($feed_id, $tag_names);
+                }
+            }
 
-                $sql_forward = "INSERT INTO `feed` ( `text` , `group_id` , `images` , `files` , `uid` , `is_paid` , `timeline` , `is_forward` , `forward_feed_id` , `forward_uid` , `forward_text` , `forward_is_paid` , `forward_group_id` , `forward_timeline`  ) VALUES ( :text , '0' , :images ,  :files , :original_uid , :is_paid , :original_timeline , '1' , :forward_feed_id , :forward_uid , '' , :is_paid , :forward_group_id , :forward_timeline )";
-                $params_forward = [
-                    ':text' => $text, ':images' => $images, ':files' => $attach, ':original_uid' => $uid,
-                    ':is_paid' => $is_paid, ':original_timeline' => $now, // Using original feed's timeline or current time for forward? Original used $now for both.
-                    ':forward_feed_id' => $feed_id, ':forward_uid' => $uid,
-                    ':forward_group_id' => $gid, ':forward_timeline' => $now
-                ];
-                run_sql($sql_forward, $params_forward);
+            // Poll creation logic
+            // $post_type is already determined before inserting the main feed
+            if ($params_insert_feed[':post_type'] === 'poll' && !empty($poll_question) && !empty($poll_options_json)) {
+                $poll_options = @json_decode($poll_options_json, true);
+                if (is_array($poll_options) && count($poll_options) >= 2) {
+                    try {
+                        run_sql("INSERT INTO `polls` (`feed_id`, `question`, `created_at`) VALUES (:feed_id, :question, :now)", [
+                            ':feed_id' => $feed_id,
+                            ':question' => $poll_question,
+                            ':now' => $now
+                        ]);
+                        $poll_id = db()->lastId();
 
-                run_sql("UPDATE `group` SET `feed_count` = ( SELECT COUNT(*) FROM `feed` WHERE `forward_group_id` = :gid AND `is_delete` != 1 ) WHERE `id`= :gid LIMIT 1", [':gid' => $gid]);
-                run_sql("UPDATE `user` SET `feed_count` = ( SELECT COUNT(*) FROM `feed` WHERE `uid` = :uid AND `is_delete` != 1 AND `is_forward` != 1 ) WHERE `id`= :uid LIMIT 1", [':uid' => $uid]);
+                        if ($poll_id) {
+                            foreach ($poll_options as $option_text) {
+                                if (!empty(trim($option_text))) {
+                                    run_sql("INSERT INTO `poll_options` (`poll_id`, `option_text`) VALUES (:poll_id, :option_text)", [
+                                        ':poll_id' => $poll_id,
+                                        ':option_text' => trim($option_text)
+                                    ]);
+                                }
+                            }
+                            // If post_type was not 'poll' initially due to other content, but poll was added, update it.
+                            // This is already handled as $params_insert_feed[':post_type'] would be 'poll'.
+                            // For clarity, we can ensure the $post_type variable used for forwarding is also 'poll'.
+                            // $post_type = 'poll'; // Redundant if logic for $params_insert_feed[':post_type'] is correct
+                        }
+                    } catch (\PDOException $e) {
+                        // Log error or handle
+                        // error_log("Poll creation error for feed $feed_id: " . $e->getMessage());
+                    }
+                }
             }
         }
-        
-        if (is_array($member_gids) && count($member_gids) > 0) {
-            foreach ($member_gids as $gid) {
-                if (!in_array($gid, $group_ids)) continue;
-                $gid = intval($gid);
 
-                $sql_contribute = "INSERT IGNORE INTO `feed_contribute` ( `uid` , `feed_id` , `group_id` , `status`, `timeline` ) VALUES ( :uid , :feed_id , :group_id , '0' , :timeline )";
-                run_sql($sql_contribute, [':uid' => $uid, ':feed_id' => $feed_id, ':group_id' => $gid, ':timeline' => $now]);
-
-                run_sql("UPDATE `group` SET `todo_count` = ( SELECT COUNT(*) FROM `feed_contribute` WHERE `group_id` = :gid AND `status` = 0 ) WHERE `id`= :gid LIMIT 1", [':gid' => $gid]);
-
-                $group = get_line("SELECT * FROM `group` WHERE `id`= :gid LIMIT 1", [':gid' => $gid]);
-                if ($group && $group['author_uid'] != $uid) {
-                    system_notice($group['author_uid'], $uid, lianmi_username(), lianmi_nickname(), 'contribute to'. $group['name'], '/group/contribute/todo');
+        if ($current_status == 'published') {
+            if (is_array($author_gids) && count($author_gids) > 0) {
+                foreach ($author_gids as $gid) {
+                    if (!in_array($gid, $group_ids)) continue;
+                    $gid = intval($gid);
+                    // Note: $post_type for forwarded feed is correctly carried from original feed's $post_type (which is in $params_insert_feed[':post_type'])
+                    $sql_forward = "INSERT INTO `feed` ( `text` , `group_id` , `images` , `files` , `uid` , `is_paid` , `timeline` , `is_forward` , `forward_feed_id` , `forward_uid` , `forward_text` , `forward_is_paid` , `forward_group_id` , `forward_timeline`, `post_type`, `status`, `scheduled_at`  ) VALUES ( :text , '0' , :images ,  :files , :original_uid , :is_paid , :original_timeline , '1' , :forward_feed_id , :forward_uid , '' , :is_paid , :forward_group_id , :forward_timeline, :post_type_fwd, 'published', NULL )";
+                    $params_forward = [
+                        ':text' => $text, ':images' => $images, ':files' => $files_data_to_store, ':original_uid' => $uid,
+                        ':is_paid' => $is_paid, ':original_timeline' => $now,
+                        ':forward_feed_id' => $feed_id, ':forward_uid' => $uid,
+                        ':forward_group_id' => $gid, ':forward_timeline' => $now, ':post_type_fwd' => $params_insert_feed[':post_type'] // Use the determined post_type
+                    ];
+                    run_sql($sql_forward, $params_forward);
+                    $forwarded_feed_id = db()->lastId();
+                    if ($forwarded_feed_id && !empty($tags_json_string)) {
+                        $tag_names = @json_decode($tags_json_string, true);
+                        if (is_array($tag_names) && !empty($tag_names)) {
+                            $this->processFeedTags($forwarded_feed_id, $tag_names);
+                        }
+                    }
+                    run_sql("UPDATE `group` SET `feed_count` = ( SELECT COUNT(*) FROM `feed` WHERE `forward_group_id` = :gid AND `is_delete` != 1 ) WHERE `id`= :gid LIMIT 1", [':gid' => $gid]);
+                }
+            }
+            if (is_array($member_gids) && count($member_gids) > 0) {
+                foreach ($member_gids as $gid) {
+                    if (!in_array($gid, $group_ids)) continue;
+                    $gid = intval($gid);
+                    $sql_contribute = "INSERT IGNORE INTO `feed_contribute` ( `uid` , `feed_id` , `group_id` , `status`, `timeline` ) VALUES ( :uid , :feed_id , :group_id , '0' , :timeline )";
+                    run_sql($sql_contribute, [':uid' => $uid, ':feed_id' => $feed_id, ':group_id' => $gid, ':timeline' => $now]);
+                    run_sql("UPDATE `group` SET `todo_count` = ( SELECT COUNT(*) FROM `feed_contribute` WHERE `group_id` = :gid AND `status` = 0 ) WHERE `id`= :gid LIMIT 1", [':gid' => $gid]);
+                    $group = get_line("SELECT * FROM `group` WHERE `id`= :gid LIMIT 1", [':gid' => $gid]);
+                    if ($group && $group['author_uid'] != $uid) {
+                        system_notice($group['author_uid'], $uid, lianmi_username(), lianmi_nickname(), 'contribute to'. $group['name'], '/group/contribute/todo');
+                    }
                 }
             }
         }
         return send_result(compact('feed_id', 'text', 'groups', 'images', 'is_paid'));
     }
+
+    /**
+    * Vote for a poll option
+    * @ApiDescription(section="Poll", description="Vote for a poll option")
+    * @ApiLazyRoute(uri="/poll_option/@option_id/vote", method="POST")
+    * @ApiParams(name="option_id", type="int", nullable=false, description="ID of the poll option to vote for", check="check_uint")
+    * @ApiReturn(type="object", sample="{'code': 0, 'message': 'Vote cast successfully'}")
+    */
+   public function votePollOption($option_id)
+   {
+       $option_id = intval($option_id);
+       $user_id = lianmi_uid();
+
+       // Get poll_id from option_id
+       $option = get_line("SELECT `id`, `poll_id` FROM `poll_options` WHERE `id` = :option_id LIMIT 1", [':option_id' => \$option_id]);
+       if (!\$option) {
+           return lianmi_throw('INPUT', 'Poll option not found.');
+       }
+       \$poll_id = \$option['poll_id'];
+
+       // Check if the feed associated with the poll is published and accessible
+       // Also ensures poll itself exists by joining.
+       \$feed = get_line("SELECT f.id, f.status, f.uid FROM feed f JOIN polls p ON f.id = p.feed_id WHERE p.id = :poll_id AND f.is_delete = 0 LIMIT 1", [':poll_id' => \$poll_id]);
+       if (!\$feed) {
+           return lianmi_throw('INPUT', 'Associated feed not found or poll does not exist.');
+       }
+
+       // Allow voting if feed is published OR if the voter is the author of the feed (even if draft/scheduled).
+       if (\$feed['status'] !== 'published' && \$feed['uid'] != \$user_id) {
+           return lianmi_throw('AUTH', 'Cannot vote on unpublished polls unless you are the author.');
+       }
+
+
+       try {
+           run_sql("INSERT INTO `poll_votes` (`poll_id`, `poll_option_id`, `user_id`, `created_at`) VALUES (:poll_id, :option_id, :user_id, :now)", [
+               ':poll_id' => \$poll_id,
+               ':option_id' => \$option_id,
+               ':user_id' => \$user_id,
+               ':now' => lianmi_now()
+           ]);
+           return send_result(['message' => 'Vote cast successfully']);
+       } catch (\PDOException \$e) {
+           if (\$e->getCode() == 23000) { // Unique constraint violation (poll_id, user_id)
+               return lianmi_throw('ALREADY_VOTED', 'You have already voted on this poll.');
+           }
+           // error_log("Vote error: " . \$e->getMessage());
+           return lianmi_throw('DATABASE', 'Could not cast vote.');
+       }
+   }
 
     /**
      * 获得我创建的栏目列表
@@ -527,66 +842,143 @@ class AuthedApiController
      */
     public function getGroupFeed($id, $since_id = 0, $filter = 'all')
     {
-        $id = intval($id);
+        $group_id = intval($id); // Use group_id for clarity
         $uid = lianmi_uid();
         $since_id = intval($since_id);
 
-        $info = get_line("SELECT * FROM `group_member` WHERE `uid` = :uid AND `group_id` = :group_id LIMIT 1", [':uid' => $uid, ':group_id' => $id]);
-        if (!$info) {
+        $member_info = get_line("SELECT * FROM `group_member` WHERE `uid` = :uid AND `group_id` = :group_id LIMIT 1", [':uid' => $uid, ':group_id' => $group_id]);
+        if (!$member_info) {
             return lianmi_throw('AUTH', '只有成员才能查看栏目内容');
         }
 
-        $filter_conditions = [];
-        $params = [':forward_group_id' => $id];
+        $groupinfo = get_line("SELECT * FROM `group` WHERE `id` = :id LIMIT 1", [':id' => $group_id]);
+        if (!$groupinfo) {
+            return lianmi_throw('INPUT', '栏目不存在');
+        }
+
+        // 1. Fetch Top Feed
+        $topfeed_data_final = false;
+        if (isset($groupinfo['top_feed_id']) && intval($groupinfo['top_feed_id']) > 0) {
+            $top_feed_id = intval($groupinfo['top_feed_id']);
+            $topfeed_query_params = [':top_feed_id' => $top_feed_id];
+            // Ensure the top feed is actually part of the current group to avoid misconfiguration issues
+            $topfeed_sql = "SELECT *, uid as user, forward_group_id as group FROM feed WHERE id = :top_feed_id AND forward_group_id = :current_group_id AND is_delete = 0 AND status = 'published' LIMIT 1";
+            $topfeed_query_params[':current_group_id'] = $group_id;
+
+            $fetched_topfeed = get_line($topfeed_sql, $topfeed_query_params);
+
+            if ($fetched_topfeed) {
+                // Check visibility for paid top feed
+                if ($fetched_topfeed['is_paid'] == 1 && $member_info['is_vip'] != 1 && $member_info['is_author'] != 1) {
+                    // Non-VIP/author cannot see paid top feed, so effectively no top feed for this user
+                    $topfeed_data_final = false;
+                } else {
+                    $topfeed_data_final = extend_field_oneline($fetched_topfeed, 'user', 'user');
+                    $topfeed_data_final = extend_field_oneline($topfeed_data_final, 'group', 'group');
+                }
+            }
+        }
+
+        // 2. Fetch Pinned Feeds
+        $pinned_feeds_sql = "SELECT *, uid as user, forward_group_id as group FROM feed WHERE forward_group_id = :group_id AND is_pinned_in_group = 1 AND is_delete = 0 AND status = 'published' ORDER BY timeline DESC LIMIT 5";
+        $pinned_feeds_params = [':group_id' => $group_id];
+        $pinned_feeds_data = get_data($pinned_feeds_sql, $pinned_feeds_params);
+
+        if ($pinned_feeds_data) {
+            // Filter out paid pinned feeds if user is not VIP/Author
+            $pinned_feeds_data = array_filter($pinned_feeds_data, function($feed_item) use ($member_info) {
+                if ($feed_item['is_paid'] == 1 && $member_info['is_vip'] != 1 && $member_info['is_author'] != 1) {
+                    return false; // Exclude paid feed for non-VIP/author
+                }
+                return true;
+            });
+            $pinned_feeds_data = array_values($pinned_feeds_data); // Re-index
+
+            $pinned_feeds_data = extend_field($pinned_feeds_data, 'user', 'user');
+            $pinned_feeds_data = extend_field($pinned_feeds_data, 'group', 'group');
+
+            // Filter out the main $topfeed_data_final from $pinned_feeds_data if it's duplicated
+            if ($topfeed_data_final && isset($topfeed_data_final['id'])) {
+                $pinned_feeds_data = array_filter($pinned_feeds_data, function($pf) use ($topfeed_data_final) {
+                    return $pf['id'] != $topfeed_data_final['id'];
+                });
+                $pinned_feeds_data = array_values($pinned_feeds_data); // Re-index array
+            }
+        } else {
+            $pinned_feeds_data = []; // Ensure it's an empty array if no pinned feeds
+        }
+
+        // 3. Prepare Excluded IDs for Regular Feeds
+        $exclude_ids = [];
+        if ($topfeed_data_final && isset($topfeed_data_final['id'])) {
+            $exclude_ids[] = $topfeed_data_final['id'];
+        }
+        foreach ($pinned_feeds_data as $pf) {
+            if (isset($pf['id'])) {
+                $exclude_ids[] = $pf['id'];
+            }
+        }
+        $exclude_ids = array_unique($exclude_ids);
+
+        // 4. Construct exclude_sql_part for Regular Feeds Query
+        $exclude_sql_part = "";
+        if (!empty($exclude_ids)) {
+            $safe_exclude_ids = array_map('intval', $exclude_ids); // Ensure all IDs are integers
+            $exclude_sql_part = " AND id NOT IN (" . implode(',', $safe_exclude_ids) . ") ";
+        }
+
+        // 5. Fetch Regular Feeds
+        $regular_feeds_filter_conditions = [];
+        $regular_feeds_params = [':forward_group_id' => $group_id];
 
         if ($filter == 'paid') {
-            $filter_conditions[] = "`is_paid` = 1";
+            $regular_feeds_filter_conditions[] = "`is_paid` = 1";
         }
         if ($filter == 'media') {
-            $filter_conditions[] = "`images` != ''"; // Assuming images is never NULL for media
+            $regular_feeds_filter_conditions[] = "`images` != ''";
         }
         
-        if ($info['is_vip'] != 1 && $info['is_author'] != 1) {
-            $filter_conditions[] = "`is_paid` != 1";
+        // Apply visibility rules for regular feeds based on VIP status
+        if ($member_info['is_vip'] != 1 && $member_info['is_author'] != 1) {
+            $regular_feeds_filter_conditions[] = "`is_paid` != 1"; // Non-VIP/author cannot see paid regular feeds
         }
         
         if ($since_id > 0) {
-            $filter_conditions[] = "`id` < :since_id";
-            $params[':since_id'] = $since_id;
+            $regular_feeds_filter_conditions[] = "`id` < :since_id";
+            $regular_feeds_params[':since_id'] = $since_id;
         }
         
-        $where_clause = "WHERE `is_delete` != 1 AND `forward_group_id` = :forward_group_id";
-        if (!empty($filter_conditions)) {
-            $where_clause .= " AND " . join(" AND ", $filter_conditions);
+        $regular_feeds_where_clause = "WHERE `is_delete` != 1 AND `forward_group_id` = :forward_group_id AND `status` = 'published' AND `is_pinned_in_group` = 0 ";
+        if (!empty($regular_feeds_filter_conditions)) {
+            $regular_feeds_where_clause .= " AND " . join(" AND ", $regular_feeds_filter_conditions);
         }
+        $regular_feeds_where_clause .= $exclude_sql_part; // Add exclusion for top and pinned feeds
 
-        $sql = "SELECT *, `uid` as `user` , `forward_group_id` as `group` FROM `feed` {$where_clause} ORDER BY `id` DESC LIMIT " . intval(c('feeds_per_page'));
+        $regular_feeds_sql = "SELECT *, `uid` as `user`, `forward_group_id` as `group` FROM `feed` {$regular_feeds_where_clause} ORDER BY `id` DESC LIMIT " . intval(c('feeds_per_page'));
         
-        $data = get_data($sql, $params);
-        $data = extend_field($data, 'user', 'user'); // extend_field needs to be checked if it uses parameterized queries internally or if its inputs are safe
-        $data = extend_field($data, 'group', 'group');
+        $regular_feeds_data = get_data($regular_feeds_sql, $regular_feeds_params);
+        $regular_feeds_data = extend_field($regular_feeds_data, 'user', 'user');
+        $regular_feeds_data = extend_field($regular_feeds_data, 'group', 'group');
         
-        $maxid = null; $minid = null;
-        if (is_array($data) && count($data) > 0) {
-            $maxid = $minid = $data[0]['id'];
-            foreach ($data as $item) {
-                if ($item['id'] > $maxid) $maxid = $item['id'];
-                if ($item['id'] < $minid) $minid = $item['id'];
-            }
-        }
-
-        $groupinfo = get_line("SELECT * FROM `group` WHERE `id` = :id LIMIT 1", [':id' => $id]);
-        $topfeed = false;
-        if ($groupinfo && isset($groupinfo['top_feed_id']) && intval($groupinfo['top_feed_id']) > 0) {
-            $topfeed_id = intval($groupinfo['top_feed_id']);
-            $topfeed_data = get_line("SELECT *, `uid` as `user` , `forward_group_id` as `group` FROM `feed` WHERE `is_delete` != 1 AND `id` = :top_feed_id LIMIT 1", [':top_feed_id' => $topfeed_id]);
-            if($topfeed_data){
-                $topfeed = extend_field_oneline($topfeed_data, 'user', 'user');
-                $topfeed = extend_field_oneline($topfeed, 'group', 'group');
+        // 6. Calculate Pagination for Regular Feeds
+        $maxid_for_regular = null; $minid_for_regular = null;
+        if (is_array($regular_feeds_data) && count($regular_feeds_data) > 0) {
+            $maxid_for_regular = $minid_for_regular = $regular_feeds_data[0]['id'];
+            foreach ($regular_feeds_data as $item) {
+                if ($item['id'] > $maxid_for_regular) $maxid_for_regular = $item['id'];
+                if ($item['id'] < $minid_for_regular) $minid_for_regular = $item['id'];
             }
         }
             
-        return send_result(['feeds'=>$data , 'count'=>count($data) , 'maxid'=>$maxid , 'minid'=>$minid , 'topfeed' => $topfeed ]);
+        // 7. Return Structure
+        return send_result([
+            'topfeed'       => $topfeed_data_final ?: false,
+            'pinned_feeds'  => $pinned_feeds_data,
+            'feeds'         => $regular_feeds_data,
+            'count'         => count($regular_feeds_data),
+            'maxid'         => $maxid_for_regular,
+            'minid'         => $minid_for_regular
+        ]);
     }
 
     /**
@@ -616,8 +1008,7 @@ class AuthedApiController
             }
             $sql = "INSERT IGNORE INTO `group_blacklist` ( `group_id` , `uid` , `timeline` ) VALUES ( :group_id , :target_uid , :timeline )";
             run_sql($sql, [':group_id' => $group_id, ':target_uid' => $target_uid, ':timeline' => lianmi_now()]);
-            // After blacklisting, ensure user is removed from group if quitGroup logic is complex or has side effects
-            $this->quitGroup($group_id, $target_uid); // quitGroup needs to be reviewed for safety
+            $this->quitGroup($group_id, $target_uid);
         } else {
             $sql = "DELETE FROM `group_blacklist` WHERE `group_id` = :group_id AND `uid` = :target_uid LIMIT 1";
             run_sql($sql, [':group_id' => $group_id, ':target_uid' => $target_uid]);
@@ -636,13 +1027,8 @@ class AuthedApiController
      */
     public function setGroupContributeBlackList($uid, $group_id, $status = 1)
     {
-        if ($status != 1) {
-            $status = 0;
-        }
+        if ($status != 1) { $status = 0; }
         
-        if ($status != 1) { // Ensure status is 0 or 1
-            $status = 0;
-        }
         $current_uid = lianmi_uid();
         $group_id = intval($group_id);
         $target_uid = intval($uid);
@@ -659,7 +1045,7 @@ class AuthedApiController
         $sql = "UPDATE `group_member` SET `can_contribute` = :can_contribute WHERE `uid` = :target_uid AND `group_id` = :group_id LIMIT 1";
         run_sql($sql, [':can_contribute' => $status, ':target_uid' => $target_uid, ':group_id' => $group_id]);
 
-        return send_result(['status'=>$status]); // Removed SQL from response
+        return send_result(['status'=>$status]);
     }
 
     /**
@@ -673,13 +1059,8 @@ class AuthedApiController
      */
     public function setGroupCommentBlackList($uid, $group_id, $status = 1)
     {
-        if ($status != 1) {
-            $status = 0;
-        }
+        if ($status != 1) { $status = 0; }
         
-        if ($status != 1) { // Ensure status is 0 or 1
-            $status = 0;
-        }
         $current_uid = lianmi_uid();
         $group_id = intval($group_id);
         $target_uid = intval($uid);
@@ -742,11 +1123,10 @@ class AuthedApiController
 
         $sql = $base_sql_select . $filter_conditions ." ORDER BY `id` DESC LIMIT " . intval(c('users_per_page'));
         
-        // LDO usage is safe
         $group_black_list_uids = table('group_blacklist')->getUidByGroup_id($id)->toColumn('uid'); 
         
         $data = get_data($sql, $params);
-        $data = extend_field($data, 'user', 'user'); // Review extend_field
+        $data = extend_field($data, 'user', 'user');
         
         $maxid = null; $minid = null;
         if (is_array($data) && count($data) > 0) {
@@ -778,7 +1158,6 @@ class AuthedApiController
      */
     public function groupCreate($name, $author_address, $price_wei, $cover, $seller_uid = 0)
     {
-        // $price_wei is a string representing a large integer. bigintval ensures it's a valid numeric string.
         $valid_price_wei = bigintval($price_wei);
 
         if (!check_image_url($cover)) {
@@ -799,11 +1178,11 @@ class AuthedApiController
 
         $sql_insert_group = "INSERT INTO `group` ( `name` , `author_uid` , `author_address` , `price_wei` , `cover` , `seller_uid` , `timeline` , `is_active` , `is_paid` ) VALUES ( :name , :author_uid , :author_address , :price_wei , :cover , :seller_uid , :timeline , 1 , 1 )";
         $params_insert_group = [
-            ':name' => t($name), // trim name
+            ':name' => t($name),
             ':author_uid' => $author_uid,
-            ':author_address' => t($author_address), // trim address
+            ':author_address' => t($author_address),
             ':price_wei' => $valid_price_wei,
-            ':cover' => t($cover), // trim cover URL
+            ':cover' => t($cover),
             ':seller_uid' => $seller_uid_int,
             ':timeline' => $timeline
         ];
@@ -838,7 +1217,7 @@ class AuthedApiController
         $id = intval($id);
         $uid = lianmi_uid();
 
-        if (intval(table('group')->getIs_activeById($id)->toVar()) != 1) { // LDO is safe
+        if (intval(table('group')->getIs_activeById($id)->toVar()) != 1) {
             return lianmi_throw('AUTH', '该栏目尚未启用或已被暂停');
         }
         
@@ -892,21 +1271,13 @@ class AuthedApiController
     {
         $uid = lianmi_uid();
         if (!$user = get_line("SELECT * FROM `user` WHERE `id` = :uid LIMIT 1", [':uid' => $uid])) {
-            return lianmi_throw("INPUT", "用户不存在或已失效"); // More generic error
+            return lianmi_throw("INPUT", "用户不存在或已失效");
         }
 
-        // 清空密码 hash 以免在之后的流程中出错
         unset($user['password']) ;
-
         $user['uid'] = $user['id'];
-        $user['token'] = session_id(); // 将 session id 作为 token 传回前端
-
-        // 取得当前用户参加的group
-        // 添加当前用户的group分组信息
+        $user['token'] = session_id();
         $user = array_merge($user, get_group_info($user['id'])) ;
-
-        // if( strlen( $user['avatar'] )  < 1 ) $user['avatar'] = c('default_avatar_url');
-
         return send_result($user);
     }
 
@@ -922,13 +1293,11 @@ class AuthedApiController
         $id = intval($id);
         $uid = lianmi_uid();
 
-        // Web3 related code is external, cannot refactor its internal calls.
-        // Focus on DB calls within the callback.
         $abi = json_decode(file_get_contents(AROOT . DS . 'contract' . DS . 'build' . DS . 'lianmi.abi'));
         $web3 = new \Web3\Providers\HttpProvider(new \Web3\RequestManagers\HttpRequestManager(c('web3_network'), 60));
         $contract = new \Web3\Contract($web3, $abi);
         
-        $contract->at(c('contract_address'))->call('memberOf', $id, $uid, function ($error, $data) use ($id, $uid, $contract) { // Pass $uid to callback
+        $contract->at(c('contract_address'))->call('memberOf', $id, $uid, function ($error, $data) use ($id, $uid, $contract) {
             if ($error != null) {
                 return lianmi_throw('CONTRACT', '合约调用失败：' . $error->getMessage());
             } else {
@@ -976,7 +1345,7 @@ class AuthedApiController
         $params = [
             ':group_id' => $group_id,
             ':author_address' => $group['author_address'],
-            ':group_price_wei' => $group['price_wei'], // Assuming price_wei is already a string/numeric from DB
+            ':group_price_wei' => $group['price_wei'],
             ':buyer_uid' => lianmi_uid(),
             ':created_at' => lianmi_now()
         ];
@@ -987,7 +1356,6 @@ class AuthedApiController
             return lianmi_throw("DATABASE", "预订单创建失败");
         }
         
-        // URL construction remains the same as it doesn't involve SQL
         $url =  "https://wallet.fo/Pay?params=" .$group['author_address']  . ",FOUSDT,eosio,". intval($group['price_wei'])/100 ."," . u("order=".$order_id);
         $schema = "fowallet://".u($url);
         
@@ -1024,9 +1392,8 @@ class AuthedApiController
             return lianmi_throw("AUTH", "尚未检测到转账结果，可能存在延迟，请确认到账后三到五分钟再查询");
         }
 
-        // Re-fetch order to get the latest state, important for concurrency
         $order = get_line("SELECT * FROM `order` WHERE `id` = :order_id LIMIT 1", [':order_id' => $order_id]);
-        if (!$order) { // Should not happen if it existed before
+        if (!$order) {
             return lianmi_throw("ARGS", "订单不存在");
         }
         if ($order['vip_active'] == 1) {
@@ -1139,7 +1506,6 @@ class AuthedApiController
             $filter_sql = " AND `status` ='2' ";
         }
         
-        // VIP订户和栏主可以查看付费内容
         $since_sql = $since_id == 0 ? "" : " AND `id` < '" . intval($since_id) . "' ";
 
 
@@ -1166,16 +1532,6 @@ class AuthedApiController
         
         $data = get_data($sql, $params);
        
-        /* Example structure after this point
-         * {
-            id: "16",
-            feed_id: "10",
-            group_id: "8"
-            },
-
-         */
-        
-        // 然后按 feed_id 进行合并，不然满屏幕相同的feed，只有投稿到的栏目不同
         if (is_array($data) && count($data) > 0) {
             $maxid = $minid = $data[0]['id'];
             foreach ($data as $item) {
@@ -1193,46 +1549,27 @@ class AuthedApiController
             $group_status = [];
 
             foreach ($data as $key => $item) {
-                // 将 group_id 移动到 to_groups ，作为数组
                 $data[$key]['to_groups'] = [$item['group_id']];
                 $group_status[$item['group_id']][$item['feed_id']] = $item['status'];
                 
-                // 设置标记
                 $feed_id_exists = false;
-                
-                // 开始循环 $new_data 数组，第一次时 new_data 为空
                 foreach ($new_data as $key2 => $preitem) {
-                    // 第二次时，开始进入这个循环，preitem 是上次的数据，item是当前的数据
-                    // 如果当前的投稿和上次投稿的 feed_id 一样，表示有重复
                     if ($preitem['feed_id'] == $item['feed_id']) {
-                        // 设置重复标志位，这个当前投稿不会被合并到 new_data 数组当中
                         $feed_id_exists = true;
-                        
-                        // 将 当前投稿 的 group 数据合并到已有数据中
                         $new_data[$key2]['to_groups'] = array_merge($new_data[$key2]['to_groups'], $data[$key]['to_groups']);
                         $new_data[$key2]['to_groups'] = array_unique($new_data[$key2]['to_groups']);
                     }
                 }
-                
-                // 如果不存在和已有的投稿重复的 feed_id
-                // 将当前投稿加入到 new_data 。 这时候进入下一次循环
                 if (!$feed_id_exists) {
                     $new_data[] = $data[$key];
                 }
-
-                // 将 to_groups 的 id 合并到一个数据，以便稍后展开
                 $to_group_ids = array_merge($to_group_ids, $data[$key]['to_groups']);
                 $to_group_ids = array_unique($to_group_ids);
             }
 
-            // return print_r( $group_status );
 
-
-            // Start expanding group information
             if (is_array($to_group_ids) && count($to_group_ids) > 0) {
-                // Create placeholders for IN clause
                 $group_placeholders = implode(',', array_fill(0, count($to_group_ids), '?'));
-                // Use 0-indexed array for IN clause with ? placeholders
                 if ($group_infos = get_data("SELECT * FROM `group` WHERE `id` IN ( " . $group_placeholders . " )", $to_group_ids)) {
                     $group_infos_indexed = [];
                     foreach($group_infos as $gi) $group_infos_indexed[$gi['id']] = $gi;
@@ -1252,55 +1589,13 @@ class AuthedApiController
                 }
             }
             
-            // extend_field itself uses parameterized queries now for the main query if modified,
-            // but the IN clause construction needs care.
-            // Assuming extend_field is refactored or its use here is with safe $new_data.
             $data = extend_field($new_data, 'feed', 'feed'); 
             
-            // Example structure for feed data (already exists)
-            /*
-             * id: "1",
-                feed: {
-                id: "7",
-                uid: "5",
-                group_id: "0",
-                text: "fdfdfdf",
-                is_paid: "1",
-                files: null,
-                images: null,
-                timeline: "2018-07-04 19:09:00",
-                is_forward: "0",
-                forward_feed_id: "0",
-                forward_uid: "0",
-                forward_text: null,
-                forward_is_paid: "0",
-                forward_group_id: "0",
-                to_groups: "",
-                forward_timeline: null,
-                is_delete: "0"
-                },
-                group: {
-                id: "8",
-                name: "告别游泳圈",
-                author_uid: "5",
-                price_wei: "50000000000000000",
-                author_address: "0x8C349A47caAd9374D356eB0d48d4c995EF5F1d2f",
-                is_paid: "1",
-                is_active: "1",
-                cover: "http://localhost:8088/image/u5/2018.07.01.5b386437ce834.png",
-                seller_uid: "0",
-                timeline: "2018-07-01 13:18:48",
-                member_count: "0",
-                feed_count: "0",
-                todo_count: "0"
-                }
-            */
             $feed_uids = [];
             foreach ($data as $item) {
                 if (isset($item['feed']['uid'])) {
                     $feed_uids[] = $item['feed']['uid'];
                 }
-
                 $feed_uids = array_unique($feed_uids);
             }
 
@@ -1337,7 +1632,7 @@ class AuthedApiController
     public function removeFeedComment($id)
     {
         $id = intval($id);
-        $comment = table('comment')->getAllById($id)->toLine(); // LDO is safe
+        $comment = table('comment')->getAllById($id)->toLine();
         if (!$comment) {
             return lianmi_throw('INPUT', '评论不存在或已被删除');
         }
@@ -1346,7 +1641,7 @@ class AuthedApiController
         if ($comment['uid'] == lianmi_uid()) {
             $can_delete = true;
         } else {
-            $feed = table('feed')->getAllById($comment['feed_id'])->toLine(); // LDO is safe
+            $feed = table('feed')->getAllById($comment['feed_id'])->toLine();
             if ($feed) {
                 $owner_uid = $feed['is_forward'] == 1 ? $feed['forward_uid'] : $feed['uid'];
                 if ($owner_uid == lianmi_uid()) {
@@ -1361,7 +1656,6 @@ class AuthedApiController
 
         run_sql("UPDATE `comment` SET `is_delete` = '1' WHERE `id` = :id LIMIT 1", [':id' => $id]);
         
-        // Note: The original query for comment_count was incorrect as it used $id (comment_id) instead of $comment['feed_id']
         run_sql("UPDATE `feed` SET `comment_count` = ( SELECT COUNT(*) FROM `comment` WHERE `feed_id` = :feed_id AND `is_delete` = 0 ) WHERE `id` = :feed_id LIMIT 1", [':feed_id' => $comment['feed_id']]);
 
         $comment['is_delete'] = 1;
@@ -1386,35 +1680,39 @@ class AuthedApiController
         if (!$feed) {
             return lianmi_throw('INPUT', 'ID对应的内容不存在或者你没有权限阅读');
         }
+
+        if (in_array($feed['status'], ['draft', 'scheduled']) && $feed['uid'] != $current_uid) {
+            return lianmi_throw('AUTH', 'You cannot comment on this content as it is a draft or scheduled.');
+        }
         
         $group_id = $feed['is_forward'] == 1 ? $feed['forward_group_id'] : $feed['group_id'];
         $member_ship = [];
-        if ($group_id > 0) { // Only fetch membership if there's a relevant group
+        if ($group_id > 0) {
              $member_ship = get_line("SELECT * FROM `group_member` WHERE `group_id` = :group_id AND `uid` = :uid LIMIT 1", [':group_id' => $group_id, ':uid' => $current_uid]);
         }
 
         $can_see = true;
-        $can_comment = true; // Default to true, adjust based on logic below
+        $can_comment = true;
 
-        if ($feed['is_forward'] != 1) { // Original feed (not a forward)
-            if ($feed['uid'] == $current_uid) { // Owner can always comment
+        if ($feed['is_forward'] != 1) {
+            if ($feed['uid'] == $current_uid) {
                 $can_comment = true;
-            } else { // Check blacklist for non-owner
+            } else {
                 $is_blacklisted = get_line("SELECT * FROM `user_blacklist` WHERE `uid` = :feed_owner_uid AND `block_uid` = :current_uid LIMIT 1", [':feed_owner_uid' => $feed['uid'], ':current_uid' => $current_uid]);
                 $can_comment = !$is_blacklisted;
             }
-        } else { // Forwarded feed (within a group context)
+        } else {
              $can_comment = $member_ship && ($member_ship['can_comment'] == 1);
         }
         
         if ($feed['is_paid'] == 1) {
-            $can_see = false; // Default for paid content
-            if ($feed['is_forward'] == 1) { // Forwarded paid content
+            $can_see = false;
+            if ($feed['is_forward'] == 1) {
                 if ($member_ship && ($member_ship['is_author'] == 1 || $member_ship['is_vip'] == 1)) {
                     $can_see = true;
                 }
-            } else { // Original paid content
-                if ($current_uid == $feed['uid']) { // Owner can see their own paid content
+            } else {
+                if ($current_uid == $feed['uid']) {
                     $can_see = true;
                 }
             }
@@ -1469,7 +1767,7 @@ class AuthedApiController
     public function updateUserPassword($old_password, $new_password)
     {
         $uid = lianmi_uid();
-        $user = table('user')->getAllById($uid)->toLine(); // LDO is safe
+        $user = table('user')->getAllById($uid)->toLine();
         if (!$user) {
             return lianmi_throw('INPUT', '当前用户不存在，什么鬼');
         }
@@ -1499,8 +1797,8 @@ class AuthedApiController
     public function updateUserInfo($nickname, $address = '')
     {
         $uid = lianmi_uid();
-        $nickname = mb_substr(t($nickname), 0, 15, 'UTF-8'); // Trim and then substr
-        $address = t($address); // Trim address
+        $nickname = mb_substr(t($nickname), 0, 15, 'UTF-8');
+        $address = t($address);
         
         if (in_array(strtolower($nickname), c('forbiden_nicknames'))) {
             return lianmi_throw('INPUT', '此用户昵称已被系统保留，请重新选择');
@@ -1520,7 +1818,7 @@ class AuthedApiController
      */
     public function updateUserAvatar($avatar)
     {
-        if (!check_image_url($avatar)) { // check_image_url is important validation
+        if (!check_image_url($avatar)) {
             return lianmi_throw('INPUT', '包含未被许可的图片链接，请重传图片后发布');
         }
         
@@ -1538,7 +1836,7 @@ class AuthedApiController
      */
     public function updateUserCover($cover)
     {
-        if (!check_image_url($cover)) { // check_image_url is important validation
+        if (!check_image_url($cover)) {
             return lianmi_throw('INPUT', '包含未被许可的图片链接，请重传图片后发布');
         }
         
@@ -1561,11 +1859,11 @@ class AuthedApiController
         $id = intval($id);
         $current_uid = lianmi_uid();
 
-        if (!check_image_url($cover)) { // Important validation
+        if (!check_image_url($cover)) {
             return lianmi_throw('INPUT', '包含未被许可的图片链接，请重传图片后发布');
         }
 
-        $group = table('group')->getAllById($id)->toLine(); // LDO is safe
+        $group = table('group')->getAllById($id)->toLine();
         if (!$group) {
             return lianmi_throw('INPUT', '错误的栏目ID，栏目不存在或已被删除');
         }
@@ -1574,7 +1872,7 @@ class AuthedApiController
             return lianmi_throw('AUTH', '只有栏主才能修改栏目资料');
         }
 
-        $name = t($name); // Trim name
+        $name = t($name);
         if ($name != $group['name']) {
             if (mb_strlen($name, 'UTF8') < 3) {
                 return lianmi_throw("INPUT", "栏目名字最短3个字");
@@ -1587,7 +1885,7 @@ class AuthedApiController
         $sql = "UPDATE `group` SET `name` = :name , `cover` = :cover WHERE `id` = :id AND `author_uid` = :author_uid LIMIT 1";
         run_sql($sql, [':name' => $name, ':cover' => $cover, ':id' => $id, ':author_uid' => $current_uid]);
 
-        $group['name'] = $name; // Update local object for response
+        $group['name'] = $name;
         $group['cover'] = $cover;
         return send_result($group);
     }
@@ -1600,8 +1898,6 @@ class AuthedApiController
      */
     public function checkUserInBlacklist($uid)
     {
-        // LDO is already refactored to use prepared statements.
-        // intval() is good for type safety before LDO call.
         return send_result(intval(table('user_blacklist')->getAllByArray(['uid'=>lianmi_uid(),'block_uid'=>intval($uid)])->toLine()));
     }
 
@@ -1655,12 +1951,12 @@ class AuthedApiController
         $sql = "SELECT * , `block_uid` as `user` FROM `user_blacklist` WHERE `uid` = :uid {$since_sql_condition} ORDER BY `id` DESC LIMIT {$limit}";
 
         $data = get_data($sql, $params);
-        $data = extend_field($data, 'user', 'user'); // Review extend_field
+        $data = extend_field($data, 'user', 'user');
         
         $maxid = null; $minid = null;
         if (is_array($data) && count($data) > 0) {
             $maxid = $minid = $data[0]['id'];
-            foreach ($data as $item) { // Removed $key as it's not used
+            foreach ($data as $item) {
                 if ($item['id'] > $maxid) $maxid = $item['id'];
                 if ($item['id'] < $minid) $minid = $item['id'];
             }
@@ -1677,22 +1973,17 @@ class AuthedApiController
      */
     public function getUserTimelineTop()
     {
-        // This method appears to have $filter_sql and $since_sql variables that are not defined within its scope.
-        // This indicates a potential copy-paste error or missing logic.
-        // Assuming $filter_sql and $since_sql should be empty or derived from parameters if they were intended.
-        // For now, I will remove them from the query to make it runnable, but this needs review.
-        // The query is also very complex and might benefit from being a stored procedure or view if performance is an issue.
         $uid = lianmi_uid();
-        $limit = intval(c('feeds_per_page')); // It was used in original, but no LIMIT was in the SQL. Added it.
+        $limit = intval(c('feeds_per_page'));
 
         $sql = "SELECT *,  `uid` as `user` , `forward_group_id` as `group` FROM `feed` 
-                WHERE `is_top` = 1 AND `is_forward` = 1 
+                WHERE `is_top` = 1 AND `is_forward` = 1 AND `status` = 'published'
                 AND (
                     ( `forward_group_id` IN ( SELECT `group_id` FROM `group_member` WHERE `uid` = :uid1 AND `is_vip` = 0 ) AND `is_paid` = 0 ) 
                     OR 
                     ( `forward_group_id` IN ( SELECT `group_id` FROM `group_member` WHERE `uid` = :uid2 AND (`is_vip` = 1 OR `is_author` = 1 ) ) )
                 ) 
-                GROUP BY `forward_feed_id` ORDER BY `id` DESC LIMIT {$limit}"; // Assuming `is_author` was intended instead of `uid` = :uid for the second subquery part.
+                GROUP BY `forward_feed_id` ORDER BY `id` DESC LIMIT {$limit}";
 
         $params = [':uid1' => $uid, ':uid2' => $uid];
         
@@ -1731,10 +2022,9 @@ class AuthedApiController
             $params[':since_id'] = $since_id;
         }
         
-        // Corrected the alias for feed table to f for clarity in subqueries and main query conditions
         $sql = "SELECT f.*, f.`uid` as `user`, f.`forward_group_id` as `group` 
                 FROM `feed` f 
-                WHERE f.`is_top` != 1 AND f.`is_forward` = 1 
+                WHERE f.`is_top` != 1 AND f.`is_forward` = 1 AND f.`status` = 'published'
                 AND (
                     ( f.`forward_group_id` IN ( SELECT gm1.`group_id` FROM `group_member` gm1 WHERE gm1.`uid` = :uid1 AND gm1.`is_vip` = 0 ) AND f.`is_paid` = 0 ) 
                     OR 
@@ -1757,7 +2047,6 @@ class AuthedApiController
                 if ($item['id'] < $minid) $minid = $item['id'];
             }
         }
-        // Returning SQL in production is generally not recommended, but keeping original behavior for now.
         return send_result(['sql'=> $sql , 'feeds'=>$data , 'count'=>count($data) , 'maxid'=>$maxid , 'minid'=>$minid ]);
     }
 
@@ -1771,7 +2060,7 @@ class AuthedApiController
     public function getUserTimelineLastId($filter = 'all')
     {
         $uid = lianmi_uid();
-        $params = [':uid1' => $uid, ':uid2' => $uid, ':uid3' => $uid]; // Adjusted for the OR `uid` = :uid3 part
+        $params = [':uid1' => $uid, ':uid2' => $uid, ':uid3' => $uid];
         $filter_conditions = "";
 
         if ($filter == 'paid') {
@@ -1781,9 +2070,6 @@ class AuthedApiController
             $filter_conditions .= " AND f.`images` != '' ";
         }
         
-        // Corrected the alias for feed table to f and fixed uid comparison assuming it meant is_author
-        // The original query compared `uid` = lianmi_uid() in the second subquery part, which might be for "author" of the feed itself,
-        // or if the group_member.uid (gm2.uid) is the author of the group. Assuming gm2.is_author was intended as in getUserTimeline.
         $sql = "SELECT f.`id` FROM `feed` f
                 WHERE f.`is_top` != 1 AND f.`is_forward` = 1 
                 AND (
@@ -1796,8 +2082,149 @@ class AuthedApiController
                 ORDER BY f.`id` DESC 
                 LIMIT 1";
         
-        $last_id = get_var($sql, $params); // Use only uid1 and uid2 if uid3 was not intended
+        $last_id = get_var($sql, $params);
         return send_result($last_id);
+    }
+
+    /**
+     * Create a new tag
+     * @ApiDescription(section="Tag", description="Create a new tag")
+     * @ApiLazyRoute(uri="/tag", method="POST")
+     * @ApiParams(name="name", type="string", nullable=false, description="Tag name")
+     * @ApiParams(name="slug", type="string", nullable=true, description="Tag slug (optional, auto-generated if empty)")
+     * @ApiReturn(type="object", sample="{'code': 0, 'message': 'success', 'data': {'id': 1, 'name': 'Tech', 'slug': 'tech'}}")
+     */
+    public function createTag($name, $slug = null)
+    {
+        $name = trim($name);
+        if (empty($name)) {
+            return lianmi_throw('INPUT', 'Tag name cannot be empty.');
+        }
+
+        if (empty($slug)) {
+            $slug = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '-', $name));
+            $slug = trim($slug, '-');
+        } else {
+            $slug = strtolower(trim($slug));
+        }
+        if (empty($slug)) {
+              return lianmi_throw('INPUT', 'Tag slug could not be generated or was empty.');
+        }
+
+        try {
+            $existingTagByName = get_line("SELECT * FROM `tags` WHERE `name` = :name LIMIT 1", [':name' => $name]);
+            if ($existingTagByName) {
+                return lianmi_throw('INPUT', 'Tag name already exists.', $existingTagByName);
+            }
+            $existingTagBySlug = get_line("SELECT * FROM `tags` WHERE `slug` = :slug LIMIT 1", [':slug' => $slug]);
+            if ($existingTagBySlug) {
+                return lianmi_throw('INPUT', 'Tag slug already exists. Try a different name or slug.', $existingTagBySlug);
+            }
+
+            run_sql("INSERT INTO `tags` (`name`, `slug`, `created_at`, `updated_at`) VALUES (:name, :slug, :now, :now)", [
+                ':name' => $name,
+                ':slug' => $slug,
+                ':now' => lianmi_now()
+            ]);
+            $tag_id = db()->lastId();
+            $tag = get_line("SELECT * FROM `tags` WHERE `id` = :id", [':id' => $tag_id]);
+            return send_result($tag);
+        } catch (\PDOException $e) {
+            if ($e->getCode() == 23000) {
+                return lianmi_throw('DATABASE', 'Tag name or slug already exists (database constraint).');
+            }
+            return lianmi_throw('DATABASE', 'Failed to create tag: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * List tags
+     * @ApiDescription(section="Tag", description="List all tags")
+     * @ApiLazyRoute(uri="/tags", method="GET")
+     * @ApiParams(name="q", type="string", nullable=true, description="Search term for tag name")
+     * @ApiReturn(type="array", sample="[{'id': 1, 'name': 'Tech', 'slug': 'tech'}]")
+     */
+    public function listTags($q = null)
+    {
+        $sql = "SELECT * FROM `tags`";
+        $params = [];
+        if (!empty($q)) {
+            $sql .= " WHERE `name` LIKE :q OR `slug` LIKE :q";
+            $params[':q'] = '%' . trim($q) . '%';
+        }
+        $sql .= " ORDER BY `name` ASC";
+        $tags = get_data($sql, $params);
+        return send_result($tags);
+    }
+
+    /**
+     * Get current user's draft feeds
+     * @ApiDescription(section="Feed", description="Get my draft feeds")
+     * @ApiLazyRoute(uri="/feeds/drafts", method="GET")
+     * @ApiParams(name="since_id", type="int", nullable=true, description="For pagination, fetch drafts older than this ID")
+     * @ApiReturn(type="array", sample="[{'id': 1, 'text': 'Draft content...', 'status': 'draft'}]")
+     */
+    public function getMyDrafts($since_id = 0)
+    {
+        $uid = lianmi_uid();
+        $since_id = intval($since_id);
+        $limit = intval(c('feeds_per_page', 20));
+
+        $sql = "SELECT * FROM `feed` WHERE `uid` = :uid AND `status` = 'draft' AND `is_delete` != 1";
+        $params = [':uid' => $uid];
+
+        if ($since_id > 0) {
+            $sql .= " AND `id` < :since_id";
+            $params[':since_id'] = $since_id;
+        }
+        $sql .= " ORDER BY `id` DESC LIMIT " . $limit;
+
+        $drafts = get_data($sql, $params);
+
+        $maxid = null; $minid = null;
+        if (is_array($drafts) && count($drafts) > 0) {
+            $maxid = $minid = $drafts[0]['id'];
+            foreach ($drafts as $item) {
+                if ($item['id'] > $maxid) $maxid = $item['id'];
+                if ($item['id'] < $minid) $minid = $item['id'];
+            }
+        }
+       return send_result(['feeds'=>$drafts , 'count'=>count($drafts) , 'maxid'=>$maxid , 'minid'=>$minid ]);
+    }
+
+    /**
+     * Get current user's scheduled feeds
+     * @ApiDescription(section="Feed", description="Get my scheduled feeds")
+     * @ApiLazyRoute(uri="/feeds/scheduled", method="GET")
+     * @ApiParams(name="since_id", type="int", nullable=true, description="For pagination, fetch items older than this ID")
+     * @ApiReturn(type="array", sample="[{'id': 1, 'text': 'Scheduled content...', 'status': 'scheduled', 'scheduled_at': 'YYYY-MM-DD HH:MM:SS'}]")
+     */
+    public function getMyScheduledFeeds($since_id = 0)
+    {
+        $uid = lianmi_uid();
+        $since_id = intval($since_id);
+        $limit = intval(c('feeds_per_page', 20));
+
+        $sql = "SELECT * FROM `feed` WHERE `uid` = :uid AND `status` = 'scheduled' AND `is_delete` != 1";
+        $params = [':uid' => $uid];
+
+        if ($since_id > 0) {
+            $sql .= " AND `id` < :since_id";
+            $params[':since_id'] = $since_id;
+        }
+        $sql .= " ORDER BY `scheduled_at` ASC LIMIT " . $limit;
+
+        $scheduled_feeds = get_data($sql, $params);
+
+        $maxid = null; $minid = null;
+        if (is_array($scheduled_feeds) && count($scheduled_feeds) > 0) {
+            $maxid = $minid = $scheduled_feeds[0]['id'];
+            foreach ($scheduled_feeds as $item) {
+                if ($item['id'] > $maxid) $maxid = $item['id'];
+                if ($item['id'] < $minid) $minid = $item['id'];
+            }
+        }
+       return send_result(['feeds'=>$scheduled_feeds , 'count'=>count($scheduled_feeds) , 'maxid'=>$maxid , 'minid'=>$minid ]);
     }
 
     /**
@@ -1851,8 +2278,8 @@ class AuthedApiController
         $sql = "SELECT * , `from_uid` as `from` , `to_uid` as `to` FROM `message_group` WHERE `uid` = :uid {$since_sql_condition} ORDER BY `id` DESC  LIMIT {$limit}";
 
         $data = get_data($sql, $params);
-        $data = extend_field($data, 'from', 'user'); // Review extend_field
-        $data = extend_field($data, 'to', 'user');   // Review extend_field
+        $data = extend_field($data, 'from', 'user');
+        $data = extend_field($data, 'to', 'user');
         
         $maxid = null; $minid = null;
         if (is_array($data) && count($data) > 0) {
@@ -1901,7 +2328,7 @@ class AuthedApiController
                 if ($item['id'] < $minid) $minid = $item['id'];
             }
 
-            if ($since_id == 0) { // Only mark as read if fetching the latest page
+            if ($since_id == 0) {
                 $params_update = [':uid' => $uid, ':to_uid1' => $to_uid, ':to_uid2' => $to_uid];
                 run_sql("UPDATE `message` SET `is_read` = 1 WHERE `is_read` = 0 AND `uid` = :uid AND ( `to_uid` = :to_uid1 OR `from_uid` = :to_uid2 )", $params_update);
                 run_sql("UPDATE `message_group` SET `is_read` = 1 WHERE `is_read` = 0 AND `uid` = :uid AND ( `to_uid` = :to_uid1 OR `from_uid` = :to_uid2 )", $params_update);
@@ -1930,7 +2357,6 @@ class AuthedApiController
             return lianmi_throw('INPUT', '不要自己给自己发私信啦');
         }
         
-        // LDO is safe
         if (table('user_blacklist')->getAllByArray(['uid'=>$to_uid,'block_uid'=>$current_uid])->toLine() || 
             table('user_blacklist')->getAllByArray(['uid'=>$current_uid ,'block_uid'=>$to_uid])->toLine()) {
             return lianmi_throw('AUTH', '你或者对方在黑名单中');
@@ -1943,7 +2369,6 @@ class AuthedApiController
 
         $params_receiver_msg = [':uid' => $to_uid, ':to_uid' => $to_uid, ':from_uid' => $current_uid, ':text' => $text, ':timeline' => $now, ':is_read' => 0];
         run_sql("INSERT INTO `message` ( `uid` , `to_uid` , `from_uid` , `text` , `timeline` , `is_read` ) VALUES ( :uid , :to_uid , :from_uid , :text , :timeline , :is_read )", $params_receiver_msg);
-        // $last_mid = db()->lastId(); // This might not be needed if not used.
 
         $params_delete_group = [':to_uid1' => $to_uid, ':from_uid1' => $current_uid, ':to_uid2' => $current_uid, ':from_uid2' => $to_uid];
         run_sql("DELETE FROM `message_group` WHERE ( `to_uid` = :to_uid1 AND `from_uid` = :from_uid1 ) OR ( `to_uid` = :to_uid2 AND `from_uid` = :from_uid2 ) LIMIT 2", $params_delete_group);
@@ -1971,9 +2396,67 @@ class AuthedApiController
             return lianmi_throw("INPUT", "用户不存在");
         }
         
-        $user['uid'] = $user['id']; // Redundant if id is already uid.
+        $user['uid'] = $user['id'];
         $user['token'] = session_id();
-        $user = array_merge($user, get_group_info($user['id'])); // get_group_info needs review if it uses direct DB calls
+        $user = array_merge($user, get_group_info($user['id']));
         return send_result($user);
     }
+
+    private function processFeedTags($feed_id, $tag_names)
+    {
+        run_sql("DELETE FROM `feed_tags` WHERE `feed_id` = :feed_id", [':feed_id' => $feed_id]);
+
+        if (empty($tag_names)) {
+            return;
+        }
+
+        $tag_ids_to_associate = [];
+        foreach ($tag_names as $name) {
+            $name = trim($name);
+            if (empty($name)) continue;
+
+            $tag = get_line("SELECT `id`, `slug` FROM `tags` WHERE `name` = :name LIMIT 1", [':name' => $name]);
+            if ($tag) {
+                $tag_ids_to_associate[] = $tag['id'];
+            } else {
+                $slug = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '-', $name));
+                $slug = trim($slug, '-');
+
+                if (empty($slug)) {
+                    continue;
+                }
+
+                try {
+                     $existingTagBySlug = get_line("SELECT `id` FROM `tags` WHERE `slug` = :slug LIMIT 1", [':slug' => $slug]);
+                     if($existingTagBySlug){
+                         continue;
+                     }
+
+                    run_sql("INSERT INTO `tags` (`name`, `slug`, `created_at`, `updated_at`) VALUES (:name, :slug, :now, :now)", [
+                        ':name' => $name,
+                        ':slug' => $slug,
+                        ':now' => lianmi_now()
+                    ]);
+                    $new_tag_id = db()->lastId();
+                    if ($new_tag_id) {
+                        $tag_ids_to_associate[] = $new_tag_id;
+                    }
+                } catch (\PDOException $e) {
+                    if ($e->getCode() == 23000) {
+                        $retryTag = get_line("SELECT `id` FROM `tags` WHERE `name` = :name LIMIT 1", [':name' => $name]);
+                        if ($retryTag) $tag_ids_to_associate[] = $retryTag['id'];
+                    }
+                }
+            }
+        }
+
+        foreach (array_unique($tag_ids_to_associate) as $tag_id) {
+            run_sql("INSERT IGNORE INTO `feed_tags` (`feed_id`, `tag_id`) VALUES (:feed_id, :tag_id)", [
+                ':feed_id' => $feed_id,
+                ':tag_id' => $tag_id
+            ]);
+        }
+    }
 }
+
+[end of www/api/controller/AuthedApiController.php]

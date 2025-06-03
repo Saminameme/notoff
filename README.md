@@ -68,6 +68,7 @@ git clone https://github.com/easychen/not-only-fans.git
 cd not-only-fans
 docker-compose up -d --build
 ```
+The database is initialized when the container starts for the first time. If you need to re-initialize, you may need to remove the Docker volume for the database and restart the containers.
 
 ### Initialize project data 
 
@@ -92,7 +93,7 @@ cd /app/client/ && yarn install && yarn build
 ### Initialize the API
 
 ```bash
-cd /app/api/ && composer install && mkdir /app/api/storage && chmod -R 0777 /app/api/storage
+cd /app/api/ && composer install
 ```
 
 ### Domain pointing

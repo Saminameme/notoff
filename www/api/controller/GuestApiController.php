@@ -265,6 +265,13 @@ class GuestApiController
         if (!$can_see) {
             return lianmi_throw('AUTH', '该内容为付费内容，仅限VIP订户查看');
         }
+
+        // Increment view_count if feed is published and viewable
+        if ($feed && isset($feed['status']) && $feed['status'] == 'published' && $can_see) {
+            run_sql("UPDATE `feed` SET `view_count` = `view_count` + 1 WHERE `id` = :id", [':id' => $id]);
+            // Optionally, update $feed['view_count'] for the response if desired, though not critical for analytics.
+            // $feed['view_count'] = (isset($feed['view_count']) ? $feed['view_count'] + 1 : 1);
+        }
         
         if ($feed['is_forward'] == 1) $feed['group'] = $feed['forward_group_id']; // Ensure 'group' field has the correct group ID for extend_field
         
@@ -274,6 +281,37 @@ class GuestApiController
              $feed = extend_field_oneline($feed, 'group', 'group');
         } else {
             $feed['group'] = null; // Or some default for no group
+        }
+
+        if ($feed && $can_see && isset($feed['post_type']) && $feed['post_type'] == 'poll') {
+            $poll_data = get_line("SELECT * FROM `polls` WHERE `feed_id` = :feed_id LIMIT 1", [':feed_id' => $feed['id']]);
+            if ($poll_data) {
+                $options = get_data("
+                    SELECT po.id, po.option_text, COUNT(pv.id) as vote_count
+                    FROM `poll_options` po
+                    LEFT JOIN `poll_votes` pv ON po.id = pv.poll_option_id
+                    WHERE po.poll_id = :poll_id
+                    GROUP BY po.id, po.option_text
+                    ORDER BY po.id ASC
+                ", [':poll_id' => $poll_data['id']]);
+
+                $poll_data['options'] = $options ? $options : [];
+
+                $current_user_id = lianmi_uid(); // This will be 0 if guest
+                $poll_data['current_user_vote'] = null; // Default to null (no vote or guest)
+                if ($current_user_id > 0) {
+                    $user_vote = get_line("
+                        SELECT poll_option_id
+                        FROM `poll_votes`
+                        WHERE poll_id = :poll_id AND user_id = :user_id
+                        LIMIT 1
+                    ", [':poll_id' => $poll_data['id'], ':user_id' => $current_user_id]);
+                    if ($user_vote) {
+                        $poll_data['current_user_vote'] = intval($user_vote['poll_option_id']);
+                    }
+                }
+                $feed['poll_details'] = $poll_data;
+            }
         }
         
         return send_result($feed);
@@ -522,66 +560,152 @@ class GuestApiController
      */
     public function getGroupFeed2( $id , $since_id = 0 , $filter = 'all' )
     {
-        $info = null;
-        if( lianmi_uid() > 0 )
-        {
-            $info = db()->getData( "SELECT * FROM `group_member` WHERE `uid` = :uid AND `group_id` = :group_id LIMIT 1", [':uid' => intval(lianmi_uid()), ':group_id' => intval($id)] )->toLine();
+        $group_id = intval($id);
+        $current_uid = lianmi_uid(); // 0 if guest, >0 if token provided
+        $since_id = intval($since_id);
+
+        $groupinfo = db()->getData("SELECT * FROM `group` WHERE `id` = :id LIMIT 1", [':id' => $group_id])->toLine();
+        if (!$groupinfo) {
+            return lianmi_throw('INPUT', '栏目不存在');
         }
 
-        $params_array = [':forward_group_id' => intval($id)];
-        $sql_conditions_string = "`is_delete` != 1 AND `forward_group_id` = :forward_group_id";
-        
-        if ($filter == 'paid') $sql_conditions_string .= " AND `is_paid` = 1";
-        if ($filter == 'media') $sql_conditions_string .= " AND `images` != ''";
-        
-        if (isset($info) && $info && $info['is_vip'] != 1 && $info['is_author'] != 1) {
-            $sql_conditions_string .= " AND `is_paid` != 1";
+        // Guest Permission: Deny access to private groups that require membership check if user is a pure guest
+        if ($groupinfo['is_private'] == 1 && $groupinfo['is_need_check'] == 1 && $current_uid == 0) {
+            return lianmi_throw('AUTH', '该栏目内容受限，请登入后查看');
         }
-        
-        if (intval($since_id) > 0) {
-            $sql_conditions_string .= " AND `id` < :since_id";
-            $params_array[':since_id'] = intval($since_id);
-        }
-        
-        $limit_val = intval(c('feeds_per_page'));
-        // Note: PDO does not directly support parameter binding for LIMIT.
-        // Since $limit_val is derived from a configuration value and cast to int, it's safe.
-        $sql = "SELECT *, `uid` as `user`, `forward_group_id` as `group` FROM `feed` WHERE {$sql_conditions_string} ORDER BY `id` DESC LIMIT {$limit_val}";
 
-        $data = db()->getData( $sql, $params_array )->toArray();
-        $data = extend_field( $data , 'user' , 'user' );
-        $data = extend_field( $data , 'group' , 'group' );
-        
-        
-        if( is_array( $data ) && count( $data ) > 0  )
-        {
-            $maxid = $minid = $data[0]['id'];
-            foreach( $data as $item )
-            {
-                if( $item['id'] > $maxid ) $maxid = $item['id'];
-                if( $item['id'] < $minid ) $minid = $item['id'];
+        $member_info = null;
+        if ($current_uid > 0) {
+            $member_info = db()->getData("SELECT * FROM `group_member` WHERE `uid` = :uid AND `group_id` = :group_id LIMIT 1", [':uid' => $current_uid, ':group_id' => $group_id])->toLine();
+        }
+
+        // 1. Fetch Top Feed
+        $topfeed_data_final = false;
+        if (isset($groupinfo['top_feed_id']) && intval($groupinfo['top_feed_id']) > 0) {
+            $top_feed_id = intval($groupinfo['top_feed_id']);
+            $topfeed_query_params = [':top_feed_id' => $top_feed_id, ':current_group_id' => $group_id];
+            $topfeed_sql = "SELECT *, uid as user, forward_group_id as group FROM feed WHERE id = :top_feed_id AND forward_group_id = :current_group_id AND is_delete = 0 AND status = 'published' LIMIT 1";
+
+            $fetched_topfeed = get_line($topfeed_sql, $topfeed_query_params);
+
+            if ($fetched_topfeed) {
+                if ($fetched_topfeed['is_paid'] == 1) { // Paid content
+                    if ($current_uid > 0 && $member_info && ($member_info['is_vip'] == 1 || $member_info['is_author'] == 1)) {
+                        // Logged-in VIP/Author can see
+                    } else {
+                        $fetched_topfeed = null; // Guest or non-VIP/Author cannot see paid top feed
+                    }
+                }
+                if ($fetched_topfeed) {
+                    $topfeed_data_final = extend_field_oneline($fetched_topfeed, 'user', 'user');
+                    $topfeed_data_final = extend_field_oneline($topfeed_data_final, 'group', 'group');
+                }
             }
         }
-        else
-        $maxid = $minid = null;
 
-        // 获取栏目置顶feed
-        $groupinfo = db()->getData("SELECT * FROM `group` WHERE `id` = :id LIMIT 1", [':id' => intval($id)])->toLine();
-        if( $groupinfo && isset( $groupinfo['top_feed_id'] ) && intval($groupinfo['top_feed_id']) > 0  )
-        {
-            $topfeed = db()->getData("SELECT *, `uid` as `user` , `forward_group_id` as `group` FROM `feed` WHERE `is_delete` != 1 AND `id` = :id LIMIT 1", [':id' => intval($groupinfo['top_feed_id'])])->toLine();
+        // 2. Fetch Pinned Feeds
+        $pinned_feeds_sql = "SELECT *, uid as user, forward_group_id as group FROM feed WHERE forward_group_id = :group_id AND is_pinned_in_group = 1 AND is_delete = 0 AND status = 'published' ORDER BY timeline DESC LIMIT 5";
+        $pinned_feeds_params = [':group_id' => $group_id];
+        $pinned_feeds_data = get_data($pinned_feeds_sql, $pinned_feeds_params);
 
-            $topfeed = extend_field_oneline( $topfeed, 'user' , 'user' );
-            $topfeed = extend_field_oneline( $topfeed, 'group' , 'group' );
+        if ($pinned_feeds_data) {
+            $pinned_feeds_data = array_filter($pinned_feeds_data, function($feed_item) use ($current_uid, $member_info) {
+                if ($feed_item['is_paid'] == 1) {
+                    if ($current_uid > 0 && $member_info && ($member_info['is_vip'] == 1 || $member_info['is_author'] == 1)) {
+                        return true; // Logged-in VIP/Author
+                    }
+                    return false; // Guest or non-VIP/Author: exclude paid
+                }
+                return true; // Not paid, include
+            });
+            $pinned_feeds_data = array_values($pinned_feeds_data);
 
+            $pinned_feeds_data = extend_field($pinned_feeds_data, 'user', 'user');
+            $pinned_feeds_data = extend_field($pinned_feeds_data, 'group', 'group');
+
+            if ($topfeed_data_final && isset($topfeed_data_final['id'])) {
+                $pinned_feeds_data = array_filter($pinned_feeds_data, function($pf) use ($topfeed_data_final) {
+                    return $pf['id'] != $topfeed_data_final['id'];
+                });
+                $pinned_feeds_data = array_values($pinned_feeds_data);
+            }
+        } else {
+            $pinned_feeds_data = [];
         }
-        else
-            $topfeed = false;
+
+        // 3. Prepare Excluded IDs
+        $exclude_ids = [];
+        if ($topfeed_data_final && isset($topfeed_data_final['id'])) {
+            $exclude_ids[] = $topfeed_data_final['id'];
+        }
+        foreach ($pinned_feeds_data as $pf) {
+            if (isset($pf['id'])) {
+                $exclude_ids[] = $pf['id'];
+            }
+        }
+        $exclude_ids = array_unique($exclude_ids);
+
+        // 4. Construct exclude_sql_part
+        $exclude_sql_part = "";
+        if (!empty($exclude_ids)) {
+            $safe_exclude_ids = array_map('intval', $exclude_ids);
+            $exclude_sql_part = " AND id NOT IN (" . implode(',', $safe_exclude_ids) . ") ";
+        }
+
+        // 5. Fetch Regular Feeds
+        $regular_feeds_filter_conditions_list = []; // Renamed to avoid conflict
+        $regular_feeds_params = [':forward_group_id' => $group_id];
         
-        $paid_feed_count = db()->getData("SELECT COUNT(`id`) FROM `feed` WHERE `is_delete` != 1 AND `forward_group_id` = :forward_group_id AND `is_paid` = 1 ", [':forward_group_id' => intval($id)])->toVar();    
+        if ($filter == 'paid') $regular_feeds_filter_conditions_list[] = "`is_paid` = 1"; // This might be restricted by general paid visibility below
+        if ($filter == 'media') $regular_feeds_filter_conditions_list[] = "`images` != ''";
 
-        return send_result( ['feeds'=>$data , 'count'=>count($data) , 'maxid'=>$maxid , 'minid'=>$minid , 'topfeed' => $topfeed , 'paid_feed_count' => $paid_feed_count ] );
+        // Visibility for paid regular feeds
+        if ($current_uid > 0 && $member_info && ($member_info['is_vip'] == 1 || $member_info['is_author'] == 1)) {
+            // Logged-in VIP/Author can see all (paid and non-paid) subject to other filters
+        } else {
+            // Guest or non-VIP/Author: can only see non-paid
+            $regular_feeds_filter_conditions_list[] = "`is_paid` = 0";
+        }
+        
+        if ($since_id > 0) {
+            $regular_feeds_filter_conditions_list[] = "`id` < :since_id";
+            $regular_feeds_params[':since_id'] = $since_id;
+        }
+        
+        $regular_feeds_where_clause = "WHERE `is_delete` != 1 AND `forward_group_id` = :forward_group_id AND `status` = 'published' AND `is_pinned_in_group` = 0 ";
+        if (!empty($regular_feeds_filter_conditions_list)) {
+            $regular_feeds_where_clause .= " AND " . join(" AND ", $regular_feeds_filter_conditions_list);
+        }
+        $regular_feeds_where_clause .= $exclude_sql_part;
+        
+        $limit_val = intval(c('feeds_per_page'));
+        $regular_feeds_sql = "SELECT *, `uid` as `user`, `forward_group_id` as `group` FROM `feed` {$regular_feeds_where_clause} ORDER BY `id` DESC LIMIT {$limit_val}";
 
+        $regular_feeds_data = db()->getData( $regular_feeds_sql, $regular_feeds_params )->toArray();
+        $regular_feeds_data = extend_field( $regular_feeds_data , 'user' , 'user' );
+        $regular_feeds_data = extend_field( $regular_feeds_data , 'group' , 'group' );
+        
+        // 6. Calculate Pagination for Regular Feeds
+        $maxid_for_regular = null; $minid_for_regular = null;
+        if( is_array( $regular_feeds_data ) && count( $regular_feeds_data ) > 0  )
+        {
+            $maxid_for_regular = $minid_for_regular = $regular_feeds_data[0]['id'];
+            foreach( $regular_feeds_data as $item )
+            {
+                if( $item['id'] > $maxid_for_regular ) $maxid_for_regular = $item['id'];
+                if( $item['id'] < $minid_for_regular ) $minid_for_regular = $item['id'];
+            }
+        }
+        
+        // 7. Return Structure
+        return send_result([
+            'topfeed'       => $topfeed_data_final ?: false,
+            'pinned_feeds'  => $pinned_feeds_data,
+            'feeds'         => $regular_feeds_data,
+            'count'         => count($regular_feeds_data),
+            'maxid'         => $maxid_for_regular,
+            'minid'         => $minid_for_regular
+        ]);
     }
 
     /**
